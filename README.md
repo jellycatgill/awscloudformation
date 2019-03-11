@@ -4,6 +4,8 @@ Test on AWS cloudformation
 
 ## App layer
 
+`app.yml`
+
 Yaml script to deploy following except DB layer (within 5 mins)
 - Key pair credentials need to be pre-created
 - Create VPC
