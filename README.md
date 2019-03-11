@@ -20,3 +20,4 @@ Yaml script to deploy following except DB layer (within 5 mins)
 - Create an alias on DNS (route53) to point awscloudformation.org domain to to ELB 
 - Setup a monitoring agent for Datadog cloud monitoring
 
+![awscloudformation_setup](https://user-images.githubusercontent.com/41276256/54099108-97d55d00-43f2-11e9-954c-ed68324eeeb0.jpg)
