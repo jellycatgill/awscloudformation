@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  ddAPIKey:
+    Description: Enter a valid Datadog API Key.
+    Type: String
+    Default: 'a8e29f26b817b1952a4c2ca0709c5a9d'
+  myHostedDomain:
+    Description: Enter main website domain name.
+    Type: String
+    Default: 'awscloudformation.org.'
+
+
+Resources:
+  vpcTest:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 30.0.0.0/16
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags: 
+      - Key: Name 
+        Value: vpcTest
+
+  internetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  attachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref vpcTest
+      InternetGatewayId: !Ref internetGateway
+
+  routeTest:
+    Type: AWS::EC2::Route
+    DependsOn: attachGateway
+    Properties:
+      RouteTableId: !Ref routeTableTest
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref internetGateway
+
+  routeTableTest:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpcTest
+
+  subnetRouteTableAssociation2001:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref subnet2001
+      RouteTableId: !Ref routeTableTest
+
+  subnet2001:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpcTest
+      CidrBlock: 30.0.1.0/24
+      AvailabilityZone: "us-east-1a"
+
+  instance2001: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      UserData: !Base64
+        Fn::Join:
+        - ''
+        - [IPAddress=, !Ref 'IPAddress1']
+      UserData: 
+        Fn::Base64:
+          !Sub |
+              #!/bin/bash -ex
+              yum install -y httpd;
+              echo "<html><body><h1>Hello!</h1><p>Instance 1</p></body></html>" > /var/www/html/index.html;
+              chmod 755 /var/www/html/index.html;
+              systemctl enable httpd;
+              systemctl start httpd;
+              DD_API_KEY=${ddAPIKey} bash -c "$(curl -L https://raw.githubusercontent.com/DataDog/datadog-agent/master/cmd/agent/install_script.sh)"
+      InstanceType: 't2.micro'
+      ImageId: 'ami-0e6d2e8684d4ccb3e'
+      SubnetId: !Ref subnet2001
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+      - !Ref webSecurityGroup
+
+  IPAddress1:
+    Type: AWS::EC2::EIP
+
+  IPAssoc1:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref instance2001
+      EIP: !Ref IPAddress1
+
+
+  instance2002: 
+    Type: AWS::EC2::Instance
+    Properties: 
+      UserData: !Base64
+        Fn::Join:
+        - ''
+        - [IPAddress=, !Ref 'IPAddress2']
+      UserData: 
+        Fn::Base64:
+          !Sub |
+              #!/bin/bash -ex
+              yum install -y httpd;
+              echo "<html><body><h1>Hello!</h1><p>Instance 2</p></body></html>" > /var/www/html/index.html;
+              chmod 755 /var/www/html/index.html;
+              systemctl enable httpd;
+              systemctl start httpd;
+              DD_API_KEY=${ddAPIKey} bash -c "$(curl -L https://raw.githubusercontent.com/DataDog/datadog-agent/master/cmd/agent/install_script.sh)"
+      InstanceType: 't2.micro'
+      ImageId: 'ami-0e6d2e8684d4ccb3e'
+      SubnetId: !Ref subnet2001
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+      - !Ref webSecurityGroup
+
+  IPAddress2:
+    Type: AWS::EC2::EIP
+
+  IPAssoc2:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref instance2002
+      EIP: !Ref IPAddress2
+
+
+  webSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: allow http and ssh
+      VpcId: !Ref vpcTest
+      SecurityGroupIngress:
+      -
+        CidrIp: 0.0.0.0/0
+        FromPort: 80
+        IpProtocol: 'tcp'
+        ToPort: 80
+      -
+        CidrIp: 0.0.0.0/0
+        FromPort: 22
+        IpProtocol: 'tcp'
+        ToPort: 22
+        
+  NLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: networkLB
+      Scheme: internet-facing
+      Subnets: 
+      - !Ref subnet2001
+      Type: network
+
+  NLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: networkLB-target
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref vpcTest
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: 60
+      Targets:
+      - Id: !Ref instance2001
+        Port: 80
+      - Id: !Ref instance2002
+        Port: 80
+
+  NLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref NLBTargetGroup
+      LoadBalancerArn: !Ref NLB
+      Port: 80
+      Protocol: TCP
+
+  myDNS:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Ref myHostedDomain
+      Comment: Alias targeted to Network LoadBalancer.
+      RecordSets:
+      - Name: !Ref myHostedDomain
+        Type: A
+        AliasTarget:
+          HostedZoneId: !GetAtt NLB.CanonicalHostedZoneID
+          DNSName: !GetAtt NLB.DNSName
+
+
+Outputs: 
+  WebServerURL1:
+    Value: !Join ["", ["http://", !GetAtt instance2001.PublicDnsName, ":80"]]
+    Description: URL for the apache web server
+  WebServerURL2:
+    Value: !Join ["", ["http://", !GetAtt instance2002.PublicDnsName, ":80"]]
+    Description: URL for the apache web server
